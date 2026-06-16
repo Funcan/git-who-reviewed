@@ -2,6 +2,15 @@ package main
 
 import "testing"
 
+func TestDescribeFiles(t *testing.T) {
+	if got := describeFiles([]string{"a.go"}); got != `"a.go"` {
+		t.Errorf("single file: got %s", got)
+	}
+	if got := describeFiles([]string{"a.go", "b.go"}); got != `"a.go", "b.go"` {
+		t.Errorf("multiple files: got %s", got)
+	}
+}
+
 func TestIsExcludedReviewer(t *testing.T) {
 	excluded := []string{
 		"Copilot",

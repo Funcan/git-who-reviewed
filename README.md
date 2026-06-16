@@ -29,6 +29,13 @@ Usage
 git who-reviewed path/to/file.go
 ```
 
+You can pass multiple files; reviewers are collected and scored in aggregate
+across all of them (a PR touching several of the files is counted once):
+
+```sh
+git who-reviewed path/to/file.go path/to/other.go
+```
+
 Flags:
 
 | Flag          | Default              | Description                                            |

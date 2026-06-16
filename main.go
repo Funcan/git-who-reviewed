@@ -38,17 +38,17 @@ func run(args []string) error {
 		maxPRs   = fs.Int("max-prs", 50, "maximum number of PRs to inspect (0 = no limit)")
 	)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] <file>\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] <file> [<file>...]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if fs.NArg() < 1 {
 		fs.Usage()
-		return fmt.Errorf("expected exactly one <file> argument")
+		return fmt.Errorf("expected at least one <file> argument")
 	}
-	file := fs.Arg(0)
+	files := fs.Args()
 
 	ctx := context.Background()
 
@@ -77,7 +77,9 @@ func run(args []string) error {
 		return err
 	}
 
-	commits, err := gitlog.CommitsForFile(file)
+	// Gather commits across all files, de-duplicating shared commits so a PR
+	// that touched several of the given files isn't double-counted.
+	commits, err := commitsForFiles(files)
 	if err != nil {
 		return err
 	}
@@ -87,15 +89,48 @@ func run(args []string) error {
 		return err
 	}
 	if len(reviews) == 0 {
-		fmt.Printf("No reviews found across %d PR(s) touching %q.\n", prCount, file)
+		fmt.Printf("No reviews found across %d PR(s) touching %s.\n", prCount, describeFiles(files))
 		return nil
 	}
 
 	w := weighting.New(*halfLife)
 	suggestions := w.Rank(reviews)
 
-	printSuggestions(os.Stdout, file, prCount, suggestions, *limit)
+	printSuggestions(os.Stdout, describeFiles(files), prCount, suggestions, *limit)
 	return nil
+}
+
+// commitsForFiles returns the union of commits touching any of the given files,
+// preserving first-seen order and de-duplicating commits shared across files.
+func commitsForFiles(files []string) ([]string, error) {
+	seen := map[string]bool{}
+	var commits []string
+	for _, f := range files {
+		fileCommits, err := gitlog.CommitsForFile(f)
+		if err != nil {
+			return nil, err
+		}
+		for _, sha := range fileCommits {
+			if seen[sha] {
+				continue
+			}
+			seen[sha] = true
+			commits = append(commits, sha)
+		}
+	}
+	return commits, nil
+}
+
+// describeFiles renders the file list for human-readable output.
+func describeFiles(files []string) string {
+	if len(files) == 1 {
+		return fmt.Sprintf("%q", files[0])
+	}
+	quoted := make([]string, len(files))
+	for i, f := range files {
+		quoted[i] = fmt.Sprintf("%q", f)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // collectReviews maps commits -> PRs -> reviews, de-duplicating PRs.
@@ -154,8 +189,8 @@ func isExcludedReviewer(login string) bool {
 	return strings.HasPrefix(l, "copilot") && strings.HasSuffix(l, "[bot]")
 }
 
-func printSuggestions(out *os.File, file string, prCount int, suggestions []weighting.Suggestion, limit int) {
-	fmt.Fprintf(out, "Suggested reviewers for %q (from %d PR(s)):\n\n", file, prCount)
+func printSuggestions(out *os.File, target string, prCount int, suggestions []weighting.Suggestion, limit int) {
+	fmt.Fprintf(out, "Suggested reviewers for %s (from %d PR(s)):\n\n", target, prCount)
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "REVIEWER\tSCORE\tREVIEWS")
 	for i, s := range suggestions {
