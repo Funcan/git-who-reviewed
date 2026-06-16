@@ -1,0 +1,12 @@
+# Compiled binary
+/git-who-reviewed
+
+# Go build/test artifacts
+*.exe
+*.test
+*.out
+/dist/
+
+# Test coverage files
+cov.*
+coverage.*
