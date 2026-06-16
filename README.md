@@ -46,6 +46,7 @@ Flags:
 | `--host`      | host of `origin`     | GitHub host (set for GitHub Enterprise).               |
 | `--remote`    | `origin`             | Git remote used to resolve owner/repo.                 |
 | `--max-prs`   | `50`                 | Maximum number of PRs to inspect (`0` = no limit).     |
+| `--concurrency` | `8`                | Number of concurrent GitHub API requests.              |
 
 Example output:
 

@@ -11,9 +11,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"git-who-reviewed/internal/github"
 	"git-who-reviewed/internal/gitlog"
@@ -36,6 +40,7 @@ func run(args []string) error {
 		host     = fs.String("host", "", "GitHub host (defaults to the host of the origin remote)")
 		remote   = fs.String("remote", "origin", "git remote to resolve owner/repo from")
 		maxPRs   = fs.Int("max-prs", 50, "maximum number of PRs to inspect (0 = no limit)")
+		workers  = fs.Int("concurrency", 8, "number of concurrent GitHub API requests")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] <file> [<file>...]\n\nFlags:\n")
@@ -84,7 +89,7 @@ func run(args []string) error {
 		return err
 	}
 
-	reviews, prCount, err := collectReviews(ctx, client, commits, *maxPRs)
+	reviews, prCount, err := collectReviews(ctx, client, commits, *maxPRs, *workers)
 	if err != nil {
 		return err
 	}
@@ -133,48 +138,94 @@ func describeFiles(files []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-// collectReviews maps commits -> PRs -> reviews, de-duplicating PRs.
-func collectReviews(ctx context.Context, client *github.Client, commits []string, maxPRs int) ([]weighting.Review, int, error) {
-	seenPR := map[int]bool{}
-	var reviews []weighting.Review
+// collectReviews maps commits -> PRs -> reviews, de-duplicating PRs. The two
+// API-bound phases (resolving PRs for each commit, then fetching reviews for
+// each PR) are executed concurrently with a bounded worker pool to reduce
+// latency, especially when many files/commits are involved.
+func collectReviews(ctx context.Context, client *github.Client, commits []string, maxPRs, concurrency int) ([]weighting.Review, int, error) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
 
+	// Phase 1: resolve the unique set of PRs that included the commits.
+	type prInfo struct {
+		number   int
+		mergedAt time.Time
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
+	var (
+		mu     sync.Mutex
+		seenPR = map[int]bool{}
+		prs    []prInfo
+	)
 	for _, sha := range commits {
-		if maxPRs > 0 && len(seenPR) >= maxPRs {
-			break
-		}
-		prs, err := client.PullsForCommit(ctx, sha)
-		if err != nil {
-			return nil, 0, err
-		}
-		for _, pr := range prs {
-			if seenPR[pr.Number] {
-				continue
-			}
-			if maxPRs > 0 && len(seenPR) >= maxPRs {
-				break
-			}
-			seenPR[pr.Number] = true
-
-			prReviews, err := client.ReviewsForPR(ctx, pr.Number)
+		sha := sha
+		g.Go(func() error {
+			found, err := client.PullsForCommit(gctx, sha)
 			if err != nil {
-				return nil, 0, err
+				return err
 			}
+			mu.Lock()
+			for _, pr := range found {
+				if !seenPR[pr.Number] {
+					seenPR[pr.Number] = true
+					prs = append(prs, prInfo{number: pr.Number, mergedAt: pr.MergedAt})
+				}
+			}
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, 0, err
+	}
+
+	// Sort by PR number descending and cap, so the limit deterministically
+	// keeps the most recent PRs.
+	sort.Slice(prs, func(i, j int) bool { return prs[i].number > prs[j].number })
+	if maxPRs > 0 && len(prs) > maxPRs {
+		prs = prs[:maxPRs]
+	}
+
+	// Phase 2: fetch reviews for each unique PR concurrently.
+	g2, g2ctx := errgroup.WithContext(ctx)
+	g2.SetLimit(concurrency)
+	var (
+		mu2     sync.Mutex
+		reviews []weighting.Review
+	)
+	for _, pr := range prs {
+		pr := pr
+		g2.Go(func() error {
+			prReviews, err := client.ReviewsForPR(g2ctx, pr.number)
+			if err != nil {
+				return err
+			}
+			mu2.Lock()
 			for _, r := range prReviews {
 				if r.Reviewer == "" || isExcludedReviewer(r.Reviewer) {
 					continue
 				}
 				when := r.SubmittedAt
 				if when.IsZero() {
-					when = pr.MergedAt
+					when = pr.mergedAt
 				}
 				reviews = append(reviews, weighting.Review{
 					Reviewer:    r.Reviewer,
 					SubmittedAt: when,
 				})
 			}
-		}
+			mu2.Unlock()
+			return nil
+		})
 	}
-	return reviews, len(seenPR), nil
+	if err := g2.Wait(); err != nil {
+		return nil, 0, err
+	}
+
+	return reviews, len(prs), nil
 }
 
 // isExcludedReviewer reports whether a reviewer login should be omitted from
