@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,6 +27,10 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, gitlog.ErrNoRemote) {
+			fmt.Fprintln(os.Stderr, "No remote origin configured so unable to find previous reviewers")
+			os.Exit(1)
+		}
 		fmt.Fprintln(os.Stderr, "git-who-reviewed:", err)
 		os.Exit(1)
 	}
@@ -43,23 +48,31 @@ func run(args []string) error {
 		workers  = fs.Int("concurrency", 8, "number of concurrent GitHub API requests")
 	)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] <file> [<file>...]\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] [<file>...]\n\n"+
+			"With no files, uses the files changed on the current branch relative to\n"+
+			"the default branch (errors if run on the default branch).\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() < 1 {
-		fs.Usage()
-		return fmt.Errorf("expected at least one <file> argument")
-	}
-	files := fs.Args()
 
 	ctx := context.Background()
 
 	repo, err := gitlog.RemoteRepo(*remote)
 	if err != nil {
 		return err
+	}
+
+	files := fs.Args()
+	if len(files) == 0 {
+		files, err = changedFilesOnBranch(*remote)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("no files changed on the current branch")
+		}
 	}
 
 	resolvedHost := *host
@@ -103,6 +116,24 @@ func run(args []string) error {
 
 	printSuggestions(os.Stdout, describeFiles(files), prCount, suggestions, *limit)
 	return nil
+}
+
+// changedFilesOnBranch resolves the files changed on the current branch
+// relative to the default branch. It errors if HEAD is on the default branch
+// (there is no feature branch to derive changes from).
+func changedFilesOnBranch(remote string) ([]string, error) {
+	branch, err := gitlog.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	defaultBranch, err := gitlog.DefaultBranch(remote)
+	if err != nil {
+		return nil, err
+	}
+	if branch == defaultBranch {
+		return nil, fmt.Errorf("on the default branch %q: switch to a feature branch or pass files explicitly", branch)
+	}
+	return gitlog.ChangedFiles(remote, defaultBranch)
 }
 
 // commitsForFiles returns the union of commits touching any of the given files,

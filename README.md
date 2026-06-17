@@ -36,6 +36,14 @@ across all of them (a PR touching several of the files is counted once):
 git who-reviewed path/to/file.go path/to/other.go
 ```
 
+With no file arguments, the files changed on the current branch (relative to the
+default branch) are used. This errors if run on the default branch:
+
+```sh
+git checkout my-feature-branch
+git who-reviewed          # suggests reviewers based on the branch's changed files
+```
+
 Flags:
 
 | Flag          | Default              | Description                                            |
