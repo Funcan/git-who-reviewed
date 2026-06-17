@@ -46,6 +46,7 @@ func run(args []string) error {
 		remote   = fs.String("remote", "origin", "git remote to resolve owner/repo from")
 		maxPRs   = fs.Int("max-prs", 50, "maximum number of PRs to inspect (0 = no limit)")
 		workers  = fs.Int("concurrency", 8, "number of concurrent GitHub API requests")
+		add      = fs.Bool("add", false, "add the suggested reviewers to the current branch's PR via the gh CLI")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: git who-reviewed [flags] [<file>...]\n\n"+
@@ -115,7 +116,66 @@ func run(args []string) error {
 	suggestions := w.Rank(reviews)
 
 	printSuggestions(os.Stdout, describeFiles(files), prCount, suggestions, *limit)
+
+	if *add {
+		reviewers := topReviewers(suggestions, *limit)
+		if err := addReviewers(resolvedHost, reviewers); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// topReviewers returns the logins of the top-N suggestions.
+func topReviewers(suggestions []weighting.Suggestion, limit int) []string {
+	var out []string
+	for i, s := range suggestions {
+		if limit > 0 && i >= limit {
+			break
+		}
+		out = append(out, s.Reviewer)
+	}
+	return out
+}
+
+// addReviewers adds the given reviewers to the current branch's PR using the
+// gh CLI. Reviewers are added one at a time so that a failure for one (e.g. the
+// PR author or a non-collaborator) does not prevent the others from being
+// added; failures are reported but not fatal.
+func addReviewers(host string, reviewers []string) error {
+	if len(reviewers) == 0 {
+		return nil
+	}
+	fmt.Printf("\nAdding reviewers to current branch's PR: %s\n", strings.Join(reviewers, ", "))
+
+	var added, failed int
+	for _, r := range reviewers {
+		cmd := exec.Command("gh", "pr", "edit", "--add-reviewer", r)
+		if host != "" && host != "github.com" {
+			cmd.Env = append(os.Environ(), "GH_HOST="+host)
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			failed++
+			msg := strings.TrimSpace(string(out))
+			fmt.Fprintf(os.Stderr, "  skipped %s: %s\n", r, firstLine(msg))
+			continue
+		}
+		added++
+		fmt.Printf("  added %s\n", r)
+	}
+	fmt.Printf("Done: %d added, %d skipped\n", added, failed)
+	return nil
+}
+
+// firstLine returns the first non-empty line of s, for concise error reporting.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return "unknown error"
 }
 
 // changedFilesOnBranch resolves the files changed on the current branch

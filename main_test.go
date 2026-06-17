@@ -1,6 +1,28 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"git-who-reviewed/internal/weighting"
+)
+
+func TestTopReviewers(t *testing.T) {
+	suggestions := []weighting.Suggestion{
+		{Reviewer: "alice", Score: 3},
+		{Reviewer: "bob", Score: 2},
+		{Reviewer: "carol", Score: 1},
+	}
+	if got := topReviewers(suggestions, 2); !reflect.DeepEqual(got, []string{"alice", "bob"}) {
+		t.Errorf("limit 2: got %v", got)
+	}
+	if got := topReviewers(suggestions, 0); !reflect.DeepEqual(got, []string{"alice", "bob", "carol"}) {
+		t.Errorf("limit 0 (all): got %v", got)
+	}
+	if got := topReviewers(suggestions, 10); !reflect.DeepEqual(got, []string{"alice", "bob", "carol"}) {
+		t.Errorf("limit beyond len: got %v", got)
+	}
+}
 
 func TestDescribeFiles(t *testing.T) {
 	if got := describeFiles([]string{"a.go"}); got != `"a.go"` {
