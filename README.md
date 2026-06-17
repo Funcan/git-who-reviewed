@@ -48,7 +48,7 @@ Flags:
 
 | Flag          | Default              | Description                                            |
 | ------------- | -------------------- | ------------------------------------------------------ |
-| `--limit`     | `10`                 | Maximum number of reviewers to suggest.                |
+| `--limit`     | `5`                  | Maximum number of reviewers to suggest.                |
 | `--half-life` | `2160h` (90 days)    | Recency half-life for weighting (e.g. `720h`).         |
 | `--token`     | (see Auth)           | GitHub token.                                          |
 | `--host`      | host of `origin`     | GitHub host (set for GitHub Enterprise).               |

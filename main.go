@@ -39,7 +39,7 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("git-who-reviewed", flag.ContinueOnError)
 	var (
-		limit    = fs.Int("limit", 10, "maximum number of reviewers to suggest")
+		limit    = fs.Int("limit", 5, "maximum number of reviewers to suggest")
 		halfLife = fs.Duration("half-life", weighting.DefaultHalfLife, "recency half-life for weighting (e.g. 720h)")
 		token    = fs.String("token", "", "GitHub token (defaults to $GITHUB_TOKEN, then `gh auth token`)")
 		host     = fs.String("host", "", "GitHub host (defaults to the host of the origin remote)")
